@@ -5,3 +5,5 @@ __pycache__/
 .pytest_cache/
 .omc/
 prompts/*/fewshot.json
+tools/
+.env.local
