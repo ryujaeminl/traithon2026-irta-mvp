@@ -6,6 +6,7 @@ usage: streamlit run app.py
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import random
 import time
@@ -19,7 +20,46 @@ from irta.metrics import calibrated_c, log_odds
 from irta.texts import VERSION as TXT_VERSION
 from irta.texts import T
 
-st.set_page_config(page_title="이슈 리서치 신뢰 등급 에이전트", layout="wide")
+st.set_page_config(page_title="이슈 리서치 신뢰 등급 에이전트", page_icon="🔎", layout="wide")
+st.markdown("""<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap');
+html, body, [class*="css"], .stMarkdown, .stButton button { font-family: 'Noto Sans KR', sans-serif; }
+#MainMenu, footer, [data-testid="stToolbar"] { visibility: hidden; }
+.block-container { padding-top: 2rem; max-width: 1100px; }
+h1, h2, h3 { letter-spacing: -0.02em; }
+[data-testid="stVerticalBlockBorderWrapper"] { background: #FFFFFF; border-radius: 14px !important;
+  border: 1px solid #E6E8EE !important; box-shadow: 0 1px 3px rgba(20, 30, 60, .06); }
+.badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: .82rem; font-weight: 700;
+  margin-right: 8px; vertical-align: 2px; }
+.b-높음 { background: #E7F6EC; color: #17663A; } .b-중간 { background: #FFF4DB; color: #8A5A00; }
+.b-낮음 { background: #FDECEC; color: #A42323; } .b-정보 { background: #EEF2FD; color: #2F4BB5; }
+.chip { display: inline-block; padding: 2px 8px; border-radius: 6px; background: #F1F3F7; color: #4A5163;
+  font-size: .78rem; margin-left: 6px; }
+.title { font-size: 1.08rem; font-weight: 700; color: #1F2430; line-height: 1.5; }
+.quote { border-left: 4px solid #2F5BEA; background: #F5F7FF; padding: 10px 14px; border-radius: 0 10px 10px 0;
+  margin: 8px 0; color: #2A3042; line-height: 1.65; }
+.quote.warn { border-left-color: #D99000; background: #FFF9EC; }
+.qnum { color: #6B7385; font-size: .78rem; margin-left: 6px; }
+.small { color: #6B7385; font-size: .82rem; }
+.banner { background: #FFFFFF; border: 1px solid #DCE3FB; border-radius: 14px; padding: 14px 18px; margin-bottom: 12px; }
+.banner b { color: #2F5BEA; }
+</style>""", unsafe_allow_html=True)
+
+
+def esc(text: str) -> str:
+    return html.escape(text or "")
+
+
+BADGE = {"높음": "✔ 높음", "중간": "⚠ 중간", "낮음": "✕ 낮음"}
+
+
+def badge(grade_: str, label: str | None = None) -> str:
+    return f'<span class="badge b-{grade_}">{label or BADGE.get(grade_, grade_)}</span>'
+
+
+def card_title(a: dict, grade_: str, label: str | None = None) -> None:
+    st.markdown(f'{badge(grade_, label)}<span class="title">{esc(a["title"])}</span>'
+                f'<span class="chip">{esc(a["category"])}</span>', unsafe_allow_html=True)
 cfg = load_cfg()
 RUNS = cfg["paths"]["runs"]
 STATE = RUNS / "state.json"
@@ -52,7 +92,7 @@ def regrade(row: dict, safe: bool, t: float) -> dict:
 
 # ---------- 사이드바 ----------
 
-st.sidebar.title("이슈 리서치 신뢰 등급 에이전트")
+st.sidebar.markdown("### 🔎 이슈 리서치\n**신뢰 등급 에이전트**")
 st.sidebar.caption(T("START"))
 user = st.sidebar.text_input("크리에이터 가명 ID", value="creator-01")
 bundles = sorted((RUNS / "bundles").glob("*.jsonl"), reverse=True)
@@ -97,12 +137,13 @@ def check_correct(row: dict, q1: str | None) -> bool | None:
 
 def evidence_block(row: dict) -> None:
     a, j = row["article"], row["judgment"]
-    for n in j["evidence"]:
-        st.markdown(f"> 「{a['sentences'][n - 1]}」 *(본문 {n}번째 문장)*")
-    for n in j["irrelevant"]:
-        st.markdown(f"⚠️ 주제와 무관해 보이는 문장 — 「{a['sentences'][n - 1]}」 *(본문 {n}번째 문장)*")
+    parts = [f'<div class="quote">「{esc(a["sentences"][n - 1])}」<span class="qnum">본문 {n}번째 문장</span></div>'
+             for n in j["evidence"]]
+    parts += [f'<div class="quote warn">주제와 무관해 보이는 문장 — 「{esc(a["sentences"][n - 1])}」'
+              f'<span class="qnum">본문 {n}번째 문장</span></div>' for n in j["irrelevant"]]
+    st.markdown("".join(parts), unsafe_allow_html=True)
     if a.get("url"):
-        st.markdown(f"[원문 보기]({a['url']})")
+        st.markdown(f"[원문 보기 ↗]({a['url']})")
 
 
 def ai_panel(row: dict) -> None:
@@ -115,14 +156,18 @@ def ai_panel(row: dict) -> None:
 # ---------- 리서치 결과 (HO-01·02, TLD-01·03) ----------
 
 def page_results() -> None:
-    st.header(f"리서치 결과 — {req}")
+    st.title("리서치 결과")
+    st.markdown(f'<span class="small">{esc(req)} · 기사 {len(rows)}건</span>', unsafe_allow_html=True)
     # 점검용 기사는 등급과 무관하게 확인 목록에 섞고(구별되지 않게 순서를 섞음), 요약에는 넣지 않는다(BK06 HO-01)
     mids = sorted([r for r in rows if r["grade"] == MID or r.get("kind") == "check"],
                   key=lambda r: hashlib.sha1((req + r["article"]["id"]).encode()).hexdigest())
     highs = [r for r in rows if r["grade"] == HIGH and r.get("kind") != "check"]
     lows = [r for r in rows if r["grade"] == LOW and r.get("kind") != "check"]
-    st.caption(f"높음 {len(highs)} · 확인 필요 {len(mids)} · 제외 {len(lows)}")
-    st.info(T("TLD-01-e"))
+    m1, m2, m3 = st.columns(3)
+    m1.metric("✔ 요약에 반영 (높음)", len(highs))
+    m2.metric("⚠ 확인 필요 (중간)", len(mids))
+    m3.metric("✕ 제외 (낮음)", len(lows))
+    st.markdown(f'<div class="banner">{esc(T("TLD-01-e"))}</div>', unsafe_allow_html=True)
 
     st.subheader("확인 필요 (중간)")
     st.caption(T("TLD-03-a-보류"))
@@ -131,7 +176,7 @@ def page_results() -> None:
         aid = a["id"]
         with st.container(border=True):
             ss.setdefault(f"shown-{req}-{aid}", time.time())
-            st.markdown(f"**[중간 · 확인 필요] {a['title']}** ({a['category']})")
+            card_title(a, MID, "⚠ 중간 · 확인 필요")
             if ss["condition"].startswith("A"):
                 ai_panel(r)                       # TEST-55 대조 조건: 등급 먼저
             evidence_block(r)
@@ -162,11 +207,12 @@ def page_results() -> None:
                 if r.get("kind") == "check":
                     st.info(f"이 기사는 확인 정확도를 재는 점검용 기사였습니다. 정답: {'낚시' if r['answer'] else '정상'} "
                             f"— 회원님 응답 {'정답' if dec[aid]['check_correct'] else '오답'}. 요약에는 들어가지 않습니다.")
-            st.caption(T("TLD-01-d"))
+            st.markdown(f'<div class="small">{esc(T("TLD-01-d"))}</div>', unsafe_allow_html=True)
 
     st.subheader("요약에 반영됨 (높음)")
     for r in highs:
-        with st.expander(f"{r['article']['title']} ({r['article']['category']}) — {T('TLD-01-a-높음')}"):
+        with st.expander(f"✔ {r['article']['title']}  ·  {r['article']['category']}"):
+            st.markdown(badge(HIGH, T("TLD-01-a-높음")), unsafe_allow_html=True)
             evidence_block(r)
             st.caption(T("TLD-01-d"))
 
@@ -175,7 +221,8 @@ def page_results() -> None:
     for r in lows:
         a, aid = r["article"], r["article"]["id"]
         with st.container(border=True):
-            st.markdown(f"**{a['title']}** ({a['category']}) — 제외 사유: {REASON_TEXT[r['reason']]}")
+            card_title(a, LOW, "✕ 낮음 · 요약에서 제외")
+            st.markdown(f'<div class="small">제외 사유: {esc(REASON_TEXT[r["reason"]])}</div>', unsafe_allow_html=True)
             evidence_block(r)
             if aid in dec:
                 st.success("낮음에서 복원됨")
