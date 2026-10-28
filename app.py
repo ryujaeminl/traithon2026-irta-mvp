@@ -148,6 +148,7 @@ def search_news(feeds: list[str], top_n: int) -> None:
 
     from irta.pipeline import collect, judge_and_save, new_request_id
 
+    ss["unjudged"] = None          # 이전 '판정 대기' 목록이 새 결과를 가리지 않게 지운다
     if gpu_ready():
         with st.spinner(f"최신 기사 {top_n}건을 찾아 A.X로 판정하는 중… (기사당 약 3초)"):
             rid = new_request_id()
