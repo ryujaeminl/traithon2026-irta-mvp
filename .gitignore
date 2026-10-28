@@ -1,0 +1,5 @@
+runs/
+__pycache__/
+.ruff_cache/
+*.pyc
+.pytest_cache/

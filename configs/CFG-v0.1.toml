@@ -1,0 +1,36 @@
+# CFG-v0.1 — 승인 구성 하나에 모델·지시문·규칙·문구 버전을 묶는다 (BK05 §4.x, BK07 OPS-05·LOG-06).
+# 값이 하나라도 바뀌면 새 CFG 버전을 만든다.
+
+version = "CFG-v0.1"
+prompt_version = "PRM-v0.1"
+rule_version = "RULE-v0.1"
+text_version = "TXT-v0.1"
+
+[model]
+id = "skt/A.X-4.0-Light"
+revision = "ba21c20ea1b31ded1ec3e2fb432335077dc4be98"
+# "nf4" = 노트북 GPU(6GB)용 4bit 예비 실행. 대회 GPU에서는 "bf16"으로 바꾸고 새 CFG 버전으로 기록한다.
+precision = "nf4"
+# 응답 첫머리 레이블 토큰 id (EVD-05-04-11). scripts/smoke_test.py로 실행 환경에서 다시 확인한다.
+label_token_ids = { "낚시" = 23748, "정상" = 12541 }
+
+[decoding]
+judge_max_new_tokens = 64
+summary_max_new_tokens = 512
+# 본문 입력 상한(토큰). 넘으면 앞부분만 넣고 '본문 절단'으로 표시한다. 초기 가정값 — 실측 후 조정.
+body_max_tokens = 2000
+
+[rule]
+theta = 0.85            # 초기 가정값, TEST-42로 확정
+certainty_low = 0.60    # 확실성 3단계 경계 (TLD-01-c)
+label_mass_min = 0.90   # 두 레이블 확률 합이 이보다 작으면 형식 이탈 대리 신호 (TEST-48)
+
+[summary]
+bundle_max_articles = 10
+excluded_overlap_max = 0.5   # 제외 문장과 3-gram 겹침이 이 값 이상이면 요약 문장 삭제 (출처 검사 v0.1)
+support_overlap_min = 0.3    # 인용 기사와 겹침이 이보다 작으면 '근거 약함' 표시
+
+[paths]
+aihub_root = "../146.낚시성 기사 탐지 데이터/01-1.정식개방데이터"
+manifests = "../Basekit v1.1 작성본/evidence"
+runs = "runs"
