@@ -134,7 +134,8 @@ class Judgment:
     raw: dict = field(default_factory=dict)
 
 
-def judge_article(model: AXModel, art: Article, run_detect: bool = True) -> Judgment:
+def judge_article(model: AXModel, art: Article, run_detect: bool = True,
+                  judge_system: str | None = None) -> Judgment:
     t0 = time.perf_counter()
     sents, truncated = truncate(model, art.sentences)
     label = c = mass = pf = pn = None
@@ -143,7 +144,7 @@ def judge_article(model: AXModel, art: Article, run_detect: bool = True) -> Judg
     error = None
     raw: dict = {}
     try:
-        text, logits = model.chat(model.messages(prompts.JUDGE_SYSTEM, "judge",
+        text, logits = model.chat(model.messages(judge_system or prompts.JUDGE_SYSTEM, "judge",
                                                  prompts.judge_user(art.title, art.subtitle, sents)),
                                   model.cfg["decoding"]["judge_max_new_tokens"])
         p = model.torch.softmax(logits, -1)
