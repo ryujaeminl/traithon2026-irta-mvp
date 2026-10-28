@@ -101,6 +101,30 @@ def load_manifest(cfg: dict, eval_set: str = "EVAL-AUTO-v0.1") -> list[dict]:
         return list(csv.DictReader(fh))
 
 
+def sample_validation(cfg: dict, part: str, cls: str, method: str, k: int, seed: int,
+                      cats: tuple[str, ...] = ("EC", "ET", "GB", "IS", "LC", "PO", "SO")) -> list[tuple[Article, Label]]:
+    """두 평가 세트와 본문 해시가 겹치지 않는 Validation 기사 k건 (점검용 기사·시연 묶음, BK06·EVD-04-04-03).
+    cls: Clickbait|NonClickbait, method: Auto|Direct."""
+    import random
+
+    banned = {r["body_sha256_norm"] for s in ("EVAL-v0.1", "EVAL-AUTO-v0.1") for r in load_manifest(cfg, s)}
+    rng = random.Random(seed)
+    out: list[tuple[Article, Label]] = []
+    for cat in rng.sample(cats, len(cats)):
+        z = _zip(str(cfg["paths"]["aihub_root"] / "Validation" / "02.라벨링데이터"
+                     / f"VL_{part}_{cls}_{method}_{cat}.zip"))
+        names = [n for n in z.namelist() if n.endswith(".json")]
+        for name in rng.sample(names, min(30, len(names))):
+            rec = json.loads(z.read(name).decode("utf-8-sig"))
+            if body_hash(rec["sourceDataInfo"].get("newsContent")) in banned:
+                continue
+            out.append(parse_record(rec, part))
+            break
+        if len(out) == k:
+            break
+    return out
+
+
 def load_article(cfg: dict, row: dict) -> tuple[Article, Label]:
     """매니페스트 한 줄(label_zip, entry, part)로 Validation 라벨 zip에서 기사를 꺼낸다."""
     zpath = cfg["paths"]["aihub_root"] / "Validation" / "02.라벨링데이터" / row["label_zip"]

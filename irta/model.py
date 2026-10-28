@@ -37,20 +37,41 @@ class AXModel:
         self.model = AutoModelForCausalLM.from_pretrained(m["id"], **kw).eval()
         self.label_ids = dict(m["label_token_ids"])
         self.fewshot = json.loads(FEWSHOT_PATH.read_text(encoding="utf-8")) if FEWSHOT_PATH.exists() else []
+        self._prefixes: dict = {}
 
     def n_tokens(self, text: str) -> int:
         return len(self.tok(text, add_special_tokens=False)["input_ids"])
 
+    def _ids(self, messages: list[dict], gen: bool):
+        text = self.tok.apply_chat_template(messages, add_generation_prompt=gen, tokenize=False)
+        return self.tok(text, add_special_tokens=False, return_tensors="pt")["input_ids"].to("cuda:0")
+
+    def _prefix_cache(self, prefix: list[dict]):
+        """지시문+few-shot처럼 매번 같은 앞부분은 한 번만 계산해 KV 캐시로 둔다. shortcut: 메모리에 접두부 종류만큼 쌓임(지금 3종)."""
+        key = json.dumps(prefix, ensure_ascii=False)
+        if key not in self._prefixes:
+            ids = self._ids(prefix, gen=False)
+            with self.torch.inference_mode():
+                cache = self.model(ids, use_cache=True).past_key_values
+            self._prefixes[key] = (ids, cache)
+        return self._prefixes[key]
+
     def chat(self, messages: list[dict], max_new_tokens: int) -> tuple[str, "object"]:
-        """탐욕적 디코딩. (생성 텍스트, 첫 위치 원시 logits) 반환."""
+        """탐욕적 디코딩. (생성 텍스트, 첫 위치 원시 logits) 반환. 결과는 캐시 사용 여부와 같아야 한다."""
+        import copy
+
         torch = self.torch
-        enc = self.tok.apply_chat_template(messages, add_generation_prompt=True, return_tensors="pt",
-                                           return_dict=True)
-        ids, mask = enc["input_ids"].to("cuda:0"), enc["attention_mask"].to("cuda:0")
+        ids = self._ids(messages, gen=True)
+        kw: dict = {}
+        if len(messages) > 1:
+            p_ids, cache = self._prefix_cache(messages[:-1])
+            n = p_ids.shape[1]
+            if n < ids.shape[1] and torch.equal(ids[0, :n], p_ids[0]):
+                kw["past_key_values"] = copy.deepcopy(cache)
         with torch.inference_mode():
-            out = self.model.generate(ids, attention_mask=mask, max_new_tokens=max_new_tokens,
+            out = self.model.generate(ids, attention_mask=torch.ones_like(ids), max_new_tokens=max_new_tokens,
                                       do_sample=False, output_logits=True, return_dict_in_generate=True,
-                                      pad_token_id=self.tok.eos_token_id)
+                                      pad_token_id=self.tok.eos_token_id, **kw)
         text = self.tok.decode(out.sequences[0, ids.shape[1]:], skip_special_tokens=True)
         return text, out.logits[0][0].float()
 
@@ -102,6 +123,8 @@ class Judgment:
     label: str | None
     c: float | None
     label_mass: float | None
+    p_f: float | None          # '낚시' 토큰 확률(보정용 원값, TEST-42)
+    p_n: float | None          # '정상' 토큰 확률
     evidence: tuple[int, ...]
     irrelevant: tuple[int, ...]
     truncated: bool
@@ -113,7 +136,7 @@ class Judgment:
 def judge_article(model: AXModel, art: Article, run_detect: bool = True) -> Judgment:
     t0 = time.perf_counter()
     sents, truncated = truncate(model, art.sentences)
-    label = c = mass = None
+    label = c = mass = pf = pn = None
     evidence: list[int] = []
     irrelevant: list[int] = []
     error = None
@@ -143,7 +166,7 @@ def judge_article(model: AXModel, art: Article, run_detect: bool = True) -> Judg
                 irrelevant = found
     except Exception as exc:  # 모델 오류는 등급 규칙 ②로 중간 처리한다(TEST-48)
         error = f"모델 오류: {type(exc).__name__}"
-    return Judgment(art.id, label, c, mass, tuple(evidence), tuple(irrelevant), truncated, error,
+    return Judgment(art.id, label, c, mass, pf, pn, tuple(evidence), tuple(irrelevant), truncated, error,
                     round(time.perf_counter() - t0, 3), raw)
 
 
