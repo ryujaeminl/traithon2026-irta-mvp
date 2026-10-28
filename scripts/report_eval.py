@@ -1,6 +1,6 @@
 """판정 결과 → TEST-41·42·45와 MDL-02 지표 보고 (BK05). CPU에서 돈다.
 
-θ와 온도 T는 선택용(theta_select) 절반에서만 정하고, 확인용(theta_check) 절반은 한 번만 확인한다.
+θ와 온도 T는 선택용(theta_select) 절반에서만 정하고, 확인용(confirm) 절반은 한 번만 확인한다.
 usage: python scripts/report_eval.py
 """
 from __future__ import annotations
@@ -69,7 +69,7 @@ def main() -> None:
     d = out_dir(cfg)
     rows = load(d / "judgments.jsonl")
     sel = [r for r in rows if r["role"] == "theta_select"]
-    chk = [r for r in rows if r["role"] == "theta_check"]
+    chk = [r for r in rows if r["role"] == "confirm"]
     L: list[str] = [f"# 판정 평가 보고 — {cfg['version']} / {cfg['model']['precision']}",
                     "",
                     f"> 노트북 예비 실행 여부: {'예(4bit, 최종 수치 아님)' if cfg['model']['precision'] == 'nf4' else '아니오'}"

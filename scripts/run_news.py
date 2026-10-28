@@ -71,8 +71,9 @@ def main() -> None:
                 "label": j.label, "c": j.c, "label_mass": j.label_mass, "irrelevant": list(j.irrelevant),
                 "truncated": j.truncated, "error": j.error, "grade": g.grade, "reason": g.reason,
                 "theta": theta, "state": "정상", "seconds": j.seconds})
-            fh.write(json.dumps({"article": asdict(a), "judgment": asdict(j), "grade": g.grade,
-                                 "reason": g.reason, "row": g.row}, ensure_ascii=False) + "\n")
+            # answer(정답)는 점검용·사례 기사에만 있고, 화면은 크리에이터가 답한 뒤에만 보여 준다
+            fh.write(json.dumps({"article": asdict(a), "judgment": asdict(j), "grade": g.grade, "reason": g.reason,
+                                 "row": g.row, "kind": kind, "answer": answer}, ensure_ascii=False) + "\n")
             print(f"[{g.grade}/{g.reason or '-'} · {certainty_word(j.c, theta, low)}] {kind} {a.category} | {a.title[:45]}"
                   f" | 근거 {list(j.evidence)} 무관 {list(j.irrelevant)} | {j.seconds}s")
     print("저장:", out)

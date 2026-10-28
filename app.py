@@ -73,6 +73,8 @@ if safe:
 
 
 def log_decision(art_id: str, row: dict, decision: str, reason: str = "") -> None:
+    if dec.get(art_id, {}).get("decision") == decision:   # 같은 결정 중복 기록 방지(다시 누름·재실행)
+        return
     shown = ss.get(f"shown-{req}-{art_id}", time.time())
     rec = {"request_id": req, "creator": user, "article_id": art_id, "grade": row["grade"],
            "certainty": certainty_word(row["c"], cfg["rule"]["theta"], cfg["rule"]["certainty_low"]),
@@ -298,7 +300,7 @@ def page_operator() -> None:
                                           "verdict": res, "notice": T("TLD-05-draft", article=r["article_id"], result=res)})
 
     st.subheader("높음 등급 무작위 표본 감사 (주 5%, 최소 40건)")
-    high_rows = [r for r in l1 if r["grade"] == HIGH]
+    high_rows = list({r["article_id"]: r for r in l1 if r["grade"] == HIGH}.values())  # 같은 기사 재판정은 최신 1건
     k = min(len(high_rows), max(40, round(len(high_rows) * 0.05)))
     sample = random.Random(20261009).sample(high_rows, k) if high_rows else []
     done = {r["article_id"] for r in audited}

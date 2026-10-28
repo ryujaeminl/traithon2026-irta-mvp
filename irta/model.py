@@ -101,8 +101,9 @@ def parse_detect(text: str, n_sent: int) -> list[int] | None:
         return None
     if "없음" in m.group(1):
         return []
-    nums = [int(x) for x in re.findall(r"\d+", m.group(1))]
-    return [n for n in dict.fromkeys(nums) if 1 <= n <= n_sent]
+    nums = [n for n in dict.fromkeys(int(x) for x in re.findall(r"\d+", m.group(1))) if 1 <= n <= n_sent]
+    # 본문 절반 넘게 '무관'이면 퇴화 출력(2026-10-28 실기사에서 21문장 전부 지목)으로 보고 형식 위반 처리 → 중간
+    return None if len(nums) > max(3, n_sent // 2) else nums
 
 
 def truncate(model: AXModel, sentences: tuple[str, ...]) -> tuple[tuple[str, ...], bool]:

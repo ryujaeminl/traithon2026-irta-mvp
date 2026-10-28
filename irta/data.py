@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import re
 import tomllib
 import unicodedata
@@ -25,6 +26,8 @@ def load_cfg(name: str = "CFG-v0.1") -> dict:
     with open(ROOT / "configs" / f"{name}.toml", "rb") as fh:
         cfg = tomllib.load(fh)
     cfg["paths"] = {k: (ROOT / v).resolve() for k, v in cfg["paths"].items()}
+    if os.environ.get("IRTA_RUNS"):          # 시험·리허설은 별도 폴더에 기록해 실제 운영 로그를 오염시키지 않는다
+        cfg["paths"]["runs"] = Path(os.environ["IRTA_RUNS"]).resolve()
     return cfg
 
 
@@ -107,7 +110,9 @@ def sample_validation(cfg: dict, part: str, cls: str, method: str, k: int, seed:
     cls: Clickbait|NonClickbait, method: Auto|Direct."""
     import random
 
-    banned = {r["body_sha256_norm"] for s in ("EVAL-v0.1", "EVAL-AUTO-v0.1") for r in load_manifest(cfg, s)}
+    if k <= 0:
+        return []
+    banned ={r["body_sha256_norm"] for s in ("EVAL-v0.1", "EVAL-AUTO-v0.1") for r in load_manifest(cfg, s)}
     rng = random.Random(seed)
     out: list[tuple[Article, Label]] = []
     for cat in rng.sample(cats, len(cats)):

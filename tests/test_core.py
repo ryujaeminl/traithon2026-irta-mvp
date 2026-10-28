@@ -55,6 +55,7 @@ def test_parse_detect():
     assert parse_detect("무관: 없음", 8) == []
     assert parse_detect("무관: 7, 8, 12", 8) == [7, 8]
     assert parse_detect("모르겠다", 8) is None
+    assert parse_detect("무관: " + ", ".join(map(str, range(1, 22))), 21) is None   # 퇴화 출력
 
 
 def test_check_sources():
