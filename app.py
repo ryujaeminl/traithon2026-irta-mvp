@@ -113,14 +113,32 @@ def get_model():
 
 
 
-def remote_api() -> tuple[str, str] | None:
-    """Streamlit Cloud secrets 또는 환경변수의 판정 서버 주소·토큰."""
-    import os
+def _find_secret(name: str) -> str | None:
+    """Streamlit secrets에서 키를 찾는다. 최상위·[섹션] 안·소문자 표기 모두 허용."""
     try:
-        url, tok = st.secrets.get("IRTA_API_URL"), st.secrets.get("IRTA_API_TOKEN")
-    except Exception:          # secrets 파일이 없는 로컬 실행
-        url, tok = None, None
-    url, tok = url or os.environ.get("IRTA_API_URL"), tok or os.environ.get("IRTA_API_TOKEN")
+        sec = st.secrets.to_dict()
+    except Exception as exc:  # secrets.toml이 없거나 문법 오류
+        ss["secret_err"] = type(exc).__name__
+        return None
+
+    def walk(d: dict) -> str | None:
+        for k, v in d.items():
+            if isinstance(v, dict):
+                found = walk(v)
+                if found:
+                    return found
+            elif k.upper() == name and str(v).strip():
+                return str(v).strip()
+        return None
+    return walk(sec)
+
+
+def remote_api() -> tuple[str, str] | None:
+    """판정 서버 주소·토큰 (Streamlit Cloud secrets 또는 환경변수)."""
+    import os
+    url = _find_secret("IRTA_API_URL") or os.environ.get("IRTA_API_URL")
+    tok = _find_secret("IRTA_API_TOKEN") or os.environ.get("IRTA_API_TOKEN")
+    ss["api_missing"] = [n for n, v in (("IRTA_API_URL", url), ("IRTA_API_TOKEN", tok)) if not v]
     return (url.rstrip("/"), tok) if url and tok else None
 
 
@@ -171,6 +189,9 @@ with st.sidebar.container(border=True):
     top_n = st.select_slider("가져올 기사 수 (최신순 Top N)", [5, 10, 20, 30], value=10)
     mode = "이 컴퓨터 GPU로 판정" if gpu_ready() else ("판정 서버로 판정" if remote_api() else "판정 서버 미연결 — 목록만")
     st.caption(f"판정 방식: {mode}")
+    if mode.startswith("판정 서버 미연결"):
+        why = ss.get("secret_err") or ", ".join(ss.get("api_missing") or [])
+        st.caption(f"Secrets에서 찾지 못한 값: {why} — 앱 Settings → Secrets에 최상위로 넣고 저장한 뒤 'Reboot app'을 누르세요.")
     if st.button("기사 찾기", type="primary", use_container_width=True, disabled=not feeds_sel):
         search_news(feeds_sel, top_n)
 bundles = sorted([*(RUNS / "bundles").glob("*.jsonl"), *DEMO.glob("*.jsonl")], key=lambda p: p.stem, reverse=True)
