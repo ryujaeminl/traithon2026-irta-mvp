@@ -19,6 +19,7 @@ from irta.data import load_cfg
 from irta.grade import HIGH, LOW, MID, REASON_TEXT, certainty_word, grade
 from irta.logs import mask, now, read_log, write_log
 from irta.metrics import calibrated_c, log_odds
+from irta.news import FEEDS
 from irta.texts import VERSION as TXT_VERSION
 from irta.texts import T
 
@@ -92,6 +93,71 @@ def regrade(row: dict, safe: bool, t: float) -> dict:
     return {**row, "c": c, "grade": g.grade, "reason": g.reason}
 
 
+def gpu_ready() -> bool:
+    """Streamlit Cloud처럼 GPU가 없는 곳에서는 판정·요약을 이 화면에서 할 수 없다. IRTA_NO_GPU=1이면 GPU를 쓰지 않는다."""
+    import os
+    if os.environ.get("IRTA_NO_GPU"):
+        return False
+    try:
+        import torch
+        return torch.cuda.is_available()
+    except ImportError:
+        return False
+
+
+@st.cache_resource(show_spinner="A.X 모델을 불러오는 중…")
+def get_model():
+    from irta.model import AXModel
+    return AXModel(cfg)
+
+
+
+
+def remote_api() -> tuple[str, str] | None:
+    """Streamlit Cloud secrets 또는 환경변수의 판정 서버 주소·토큰."""
+    import os
+    try:
+        url, tok = st.secrets.get("IRTA_API_URL"), st.secrets.get("IRTA_API_TOKEN")
+    except Exception:          # secrets 파일이 없는 로컬 실행
+        url, tok = None, None
+    url, tok = url or os.environ.get("IRTA_API_URL"), tok or os.environ.get("IRTA_API_TOKEN")
+    return (url.rstrip("/"), tok) if url and tok else None
+
+
+def search_news(feeds: list[str], top_n: int) -> None:
+    """WF1·WF2 '새 기사 찾기'. GPU가 있으면 여기서 판정, 없으면 판정 서버 호출, 둘 다 없으면 목록만."""
+    import urllib.request
+
+    from irta.pipeline import collect, judge_and_save, new_request_id
+
+    if gpu_ready():
+        with st.spinner(f"최신 기사 {top_n}건을 찾아 A.X로 판정하는 중… (기사당 약 3초)"):
+            rid = new_request_id()
+            judge_and_save(get_model(), cfg, [(a, "rss", None) for a in collect(feeds, top_n)], rid)
+        ss["pick"] = rid
+        return
+    api = remote_api()
+    if api:
+        url, tok = api
+        req = urllib.request.Request(f"{url}/judge", method="POST",
+                                     data=json.dumps({"feeds": feeds, "top_n": top_n}).encode("utf-8"),
+                                     headers={"Content-Type": "application/json", "Authorization": f"Bearer {tok}"})
+        try:
+            with st.spinner(f"판정 서버에서 최신 기사 {top_n}건을 판정하는 중… (1~2분)"):
+                with urllib.request.urlopen(req, timeout=900) as resp:
+                    res = json.loads(resp.read())
+        except Exception as exc:
+            st.sidebar.error(f"판정 서버에 연결하지 못했습니다({type(exc).__name__}). 서버가 켜져 있는지 확인하세요.")
+            return
+        out = RUNS / "bundles" / f"{res['request_id']}.jsonl"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("".join(json.dumps(r, ensure_ascii=False) + chr(10) for r in res["rows"]), encoding="utf-8")
+        ss["pick"] = res["request_id"]
+        return
+    with st.spinner("기사 목록을 가져오는 중…"):
+        ss["unjudged"] = collect(feeds, top_n)
+
+
 # ---------- 사이드바 ----------
 
 st.sidebar.markdown("### 🔎 이슈 리서치\n**신뢰 등급 에이전트**")
@@ -99,11 +165,31 @@ st.sidebar.caption(T("START"))
 user = st.sidebar.text_input("크리에이터 가명 ID", value="creator-01")
 # 노트북·GPU에서 판정한 묶음(runs/bundles) + 저장소에 올린 시연 묶음(demo/bundles, Streamlit Cloud용)
 DEMO = Path(__file__).resolve().parent / "demo" / "bundles"
+with st.sidebar.container(border=True):
+    st.markdown("**새 기사 찾기**")
+    feeds_sel = st.multiselect("언론사", list(FEEDS), default=list(FEEDS))
+    top_n = st.select_slider("가져올 기사 수 (최신순 Top N)", [5, 10, 20, 30], value=10)
+    mode = "이 컴퓨터 GPU로 판정" if gpu_ready() else ("판정 서버로 판정" if remote_api() else "판정 서버 미연결 — 목록만")
+    st.caption(f"판정 방식: {mode}")
+    if st.button("기사 찾기", type="primary", use_container_width=True, disabled=not feeds_sel):
+        search_news(feeds_sel, top_n)
 bundles = sorted([*(RUNS / "bundles").glob("*.jsonl"), *DEMO.glob("*.jsonl")], key=lambda p: p.stem, reverse=True)
-if not bundles:
-    st.info("판정된 기사 묶음이 없습니다. 먼저 `python scripts/run_news.py --per-feed 3`을 실행하세요.")
+if ss.get("unjudged") is not None:
+    st.title("가져온 기사 (판정 대기)")
+    st.warning("판정 서버가 연결되지 않아 A.X 판정을 하지 못했습니다. 아래는 기사 목록뿐이며 신뢰 등급이 없습니다.")
+    for a in ss["unjudged"]:
+        st.markdown(f"- {esc(a.title)} <span class='chip'>{esc(a.category)}</span> [원문 ↗]({a.url})",
+                    unsafe_allow_html=True)
+    if st.button("목록 닫기"):
+        ss["unjudged"] = None
+        st.rerun()
     st.stop()
-bundle = st.sidebar.selectbox("리서치 요청(묶음)", bundles, format_func=lambda p: p.stem)
+if not bundles:
+    st.info("판정된 기사 묶음이 없습니다. 왼쪽 '기사 찾기'를 누르거나 `python scripts/run_news.py --top-n 10`을 실행하세요.")
+    st.stop()
+names = [p.stem for p in bundles]
+pick = names.index(ss["pick"]) if ss.get("pick") in names else 0
+bundle = st.sidebar.selectbox("리서치 요청(묶음)", bundles, index=pick, format_func=lambda p: p.stem)
 page = st.sidebar.radio("화면", ["리서치 결과", "요약", "운영자 콘솔", "실험 설정"])
 ss.setdefault("condition", "B 근거 먼저")
 state = op_state()
@@ -242,21 +328,6 @@ def page_results() -> None:
 
 
 # ---------- 요약 (MDL-03, TLD-02·04) ----------
-
-def gpu_ready() -> bool:
-    """Streamlit Cloud처럼 GPU가 없는 곳에서는 요약(MDL-03)을 만들 수 없다."""
-    try:
-        import torch
-        return torch.cuda.is_available()
-    except ImportError:
-        return False
-
-
-@st.cache_resource(show_spinner="A.X 모델을 불러오는 중…")
-def get_model():
-    from irta.model import AXModel
-    return AXModel(cfg)
-
 
 def page_summary() -> None:
     from irta.model import summarize

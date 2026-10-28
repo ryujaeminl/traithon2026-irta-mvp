@@ -17,14 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from irta.data import ROOT, load_cfg  # noqa: E402
-
-
-def minimize(row: dict) -> dict:
-    j = {k: v for k, v in row["judgment"].items() if k != "raw"}
-    keep = set(j["evidence"]) | set(j["irrelevant"])
-    a = dict(row["article"])
-    a["sentences"] = [s if i in keep else "" for i, s in enumerate(a["sentences"], 1)]
-    return {**row, "article": a, "judgment": j}
+from irta.pipeline import public_row  # noqa: E402
 
 
 def main() -> None:
@@ -36,7 +29,7 @@ def main() -> None:
     src_dir = load_cfg()["paths"]["runs"] / "bundles"
     src = src_dir / f"{args.request_id}.jsonl" if args.request_id else max(src_dir.glob("*.jsonl"))
     rows = [json.loads(ln) for ln in src.open(encoding="utf-8") if ln.strip()]
-    kept = [minimize(r) for r in rows if args.include_aihub or r["article"]["source"] == "rss"]
+    kept = [public_row(r) for r in rows if args.include_aihub or r["article"]["source"] == "rss"]
     out = ROOT / "demo" / "bundles" / src.name
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in kept), encoding="utf-8")

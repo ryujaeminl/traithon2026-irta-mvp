@@ -6,6 +6,7 @@ robots.txt를 확인하고, 요청 사이에 간격을 둔다.
 """
 from __future__ import annotations
 
+import calendar
 import hashlib
 import re
 import time
@@ -112,8 +113,10 @@ def fetch_feed(name: str, limit: int = 20) -> list[dict]:
     out = []
     for e in d.entries[:limit]:
         content = (e.get("content") or [{}])[0].get("value", "")
+        t = e.get("published_parsed") or e.get("updated_parsed")
         out.append({"source": name, "title": e.get("title", ""), "link": e.get("link", ""),
-                    "published": e.get("published", ""), "summary": e.get("summary", ""), "content": content})
+                    "published": e.get("published", ""), "ts": calendar.timegm(t) if t else 0,
+                    "summary": e.get("summary", ""), "content": content})
     return out
 
 
