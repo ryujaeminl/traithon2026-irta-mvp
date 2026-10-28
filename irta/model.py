@@ -73,7 +73,17 @@ class AXModel:
                                       do_sample=False, output_logits=True, return_dict_in_generate=True,
                                       pad_token_id=self.tok.eos_token_id, **kw)
         text = self.tok.decode(out.sequences[0, ids.shape[1]:], skip_special_tokens=True)
+        self.last_steps = (out.sequences[0, ids.shape[1]:].tolist(), out.logits)  # 판정이 중간에 나오는 형식용
         return text, out.logits[0][0].float()
+
+    def label_probs_after(self, marker: str, label_ids: dict[str, int]) -> tuple[float, float] | None:
+        """직전 생성에서 marker(예: '판정:') 바로 다음 위치의 (p낚시, p정상). 없으면 None."""
+        tokens, logits = self.last_steps
+        for i in range(len(tokens)):
+            if self.tok.decode(tokens[:i], skip_special_tokens=True).rstrip().endswith(marker):
+                p = self.torch.softmax(logits[i][0].float(), -1)
+                return p[label_ids["낚시"]].item(), p[label_ids["정상"]].item()
+        return None
 
     def messages(self, system: str, task: str, user: str) -> list[dict]:
         msgs = [{"role": "system", "content": system}]

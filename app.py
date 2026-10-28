@@ -11,6 +11,8 @@ import json
 import random
 import time
 
+from pathlib import Path
+
 import streamlit as st
 
 from irta.data import load_cfg
@@ -95,7 +97,9 @@ def regrade(row: dict, safe: bool, t: float) -> dict:
 st.sidebar.markdown("### 🔎 이슈 리서치\n**신뢰 등급 에이전트**")
 st.sidebar.caption(T("START"))
 user = st.sidebar.text_input("크리에이터 가명 ID", value="creator-01")
-bundles = sorted((RUNS / "bundles").glob("*.jsonl"), reverse=True)
+# 노트북·GPU에서 판정한 묶음(runs/bundles) + 저장소에 올린 시연 묶음(demo/bundles, Streamlit Cloud용)
+DEMO = Path(__file__).resolve().parent / "demo" / "bundles"
+bundles = sorted([*(RUNS / "bundles").glob("*.jsonl"), *DEMO.glob("*.jsonl")], key=lambda p: p.stem, reverse=True)
 if not bundles:
     st.info("판정된 기사 묶음이 없습니다. 먼저 `python scripts/run_news.py --per-feed 3`을 실행하세요.")
     st.stop()
@@ -239,6 +243,15 @@ def page_results() -> None:
 
 # ---------- 요약 (MDL-03, TLD-02·04) ----------
 
+def gpu_ready() -> bool:
+    """Streamlit Cloud처럼 GPU가 없는 곳에서는 요약(MDL-03)을 만들 수 없다."""
+    try:
+        import torch
+        return torch.cuda.is_available()
+    except ImportError:
+        return False
+
+
 @st.cache_resource(show_spinner="A.X 모델을 불러오는 중…")
 def get_model():
     from irta.model import AXModel
@@ -260,6 +273,13 @@ def page_summary() -> None:
     st.caption(T("TLD-02-b"))
     if not use:
         st.info("요약에 쓸 기사가 없습니다. 확인 필요 기사를 확인하거나 높음 기사가 있는 묶음을 고르세요.")
+        return
+    if not gpu_ready():
+        st.info("이 화면은 GPU가 없는 환경(시연 서버)이라 A.X 요약을 만들 수 없습니다. 대체 처리로 기사 목록·등급·출처만 보여 드립니다.")
+        for n, r in enumerate(use, 1):
+            a = r["article"]
+            st.markdown(f"- [출처{n} · {esc(a['category'])} · {r['grade']}] {esc(a['title'])}"
+                        + (f" — [원문]({a['url']})" if a.get("url") else ""))
         return
     if st.button("요약 생성 (A.X)"):
         sources, excl, meta = {}, [], {}

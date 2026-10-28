@@ -21,6 +21,8 @@ from irta.metrics import log_odds  # noqa: E402
 from irta.model import AXModel, judge_article  # noqa: E402
 
 SEED = 77
+NL = chr(10)
+PATTERN_OF: dict[str, str] = {}
 CATS = ["EC", "ET", "GB", "IS", "LC", "PO", "SO"]
 
 CRITERIA_V2 = """너는 뉴스 기사의 제목이 본문 내용을 정직하게 전달하는지 판정하는 검토자다.
@@ -37,6 +39,45 @@ CRITERIA_V2 = """너는 뉴스 기사의 제목이 본문 내용을 정직하게
 출력 형식(정확히 두 줄):
 첫 줄: 낚시 또는 정상 (한 단어만)
 둘째 줄: 근거: 판정에 쓴 본문 문장 번호 최대 2개 (예: 근거: 1, 3)"""
+
+
+# v0.3: 먼저 짧게 대조(검토)한 뒤 판정. c는 '판정:' 바로 다음 레이블 토큰 확률(공백 뒤 id 20253/6019)
+SYSTEM_V3 = CRITERIA_V2.split("출력 형식")[0] + """출력 형식(정확히 세 줄):
+검토: 제목의 핵심 표현이 본문 어느 문장으로 뒷받침되는지, 또는 위 1~6 중 무엇에 해당하는지 한 문장
+판정: 낚시 또는 정상
+근거: 판정에 쓴 본문 문장 번호 최대 2개 (예: 근거: 1, 3)"""
+SPACE_IDS = {"낚시": 20253, "정상": 6019}
+PATTERN_TEXT = {"11": "1번(질문형 궁금증 유발)", "12": "2번(지시어로 핵심 감춤)", "13": "3번(본문에 없는 주장·왜곡)",
+                "14": "4번(은어·감탄 표현)", "15": "5번(과장 수식어)", "16": "6번(핵심 사실 누락)"}
+
+
+def to_v3(shots: list[dict], pattern_of: dict[str, str]) -> list[dict]:
+    out = []
+    for s in shots:
+        if s["task"] != "judge":
+            out.append(s)
+            continue
+        verdict, ev = s["assistant"].split(NL)
+        n = ev.replace("근거:", "").strip().split(",")[0].strip()
+        pat = pattern_of.get(s["news_id"])
+        why = (f"제목이 {PATTERN_TEXT[pat]}에 해당하며 본문 {n}번 문장의 사실과 다르게 전달한다." if pat else
+               "제목의 주어가 본문과 다른 기사 내용을 다룬다." if verdict == "낚시" else
+               f"제목의 핵심 사실이 본문 {n}번 문장과 일치한다.")
+        out.append({**s, "assistant": NL.join([f"검토: {why}", f"판정: {verdict}", ev])})
+    return out
+
+
+def judge_v3(model, art, system):
+    from irta import prompts as P
+    text, _ = model.chat(model.messages(system, "judge", P.judge_user(art.title, art.subtitle, art.sentences)), 160)
+    probs = model.label_probs_after("판정:", SPACE_IDS)
+    label = None
+    for ln in text.splitlines():
+        if ln.strip().startswith("판정"):
+            label = "낚시" if "낚시" in ln else "정상" if "정상" in ln else None
+    if probs is None or label is None:
+        return None, None, None, "형식 위반(판정)"
+    return label, probs[0], probs[1], None
 
 
 def records(cfg: dict, zname: str, rng: random.Random, k: int, banned: set[str], ok=lambda r: True) -> list[dict]:
@@ -91,6 +132,9 @@ def fewshot_v2(cfg: dict, exclude: set[str]) -> list[dict]:
     for cat in ("SO", "EC", "ET"):
         picks += [(r, "정상") for r in records(cfg, f"TL_Part1_NonClickbait_Auto_{cat}.zip", rng, 1, banned)]
     rng.shuffle(picks)
+    for rec, _ in picks:
+        if rec["sourceDataInfo"]["processType"] == "D":
+            PATTERN_OF[rec["sourceDataInfo"]["newsID"]] = rec["sourceDataInfo"]["processPattern"]
     shots = []
     for rec, verdict in picks:
         art, _ = parse_record(rec, "Part1")
@@ -119,6 +163,13 @@ def main() -> None:
             system, shots = prompts.JUDGE_SYSTEM, base_shots
         elif v == "v0.2a":
             system, shots = CRITERIA_V2, base_shots
+        elif v == "v0.3":
+            shots2 = fewshot_v2(cfg, set(dev_ids))
+            pats = {}
+            for sh in shots2:
+                pats[sh["news_id"]] = None
+            system = SYSTEM_V3
+            shots = to_v3(shots2, PATTERN_OF) + [s for s in base_shots if s["task"] != "judge"]
         elif v == "v0.2b":
             system, shots = CRITERIA_V2, fewshot_v2(cfg, set(dev_ids)) + [s for s in base_shots if s["task"] != "judge"]
         else:
@@ -131,7 +182,11 @@ def main() -> None:
         with out.open("w", encoding="utf-8") as fh:
             for rec in recs:
                 art, lab = parse_record(rec, "Part1")
-                j = judge_article(model, art, run_detect=False, judge_system=system)
+                if v == "v0.3":
+                    lb, pf, pn, err = judge_v3(model, art, system)
+                    j = type("J", (), {"label": lb, "p_f": pf, "p_n": pn, "error": err})
+                else:
+                    j = judge_article(model, art, run_detect=False, judge_system=system)
                 grp = ("D" + lab.pattern) if lab.method == "Direct" and lab.clickbait else ("Auto" if lab.clickbait else "정상")
                 wrong = (j.label != "낚시") if lab.clickbait else (j.label == "낚시")
                 stats[grp][0] += wrong
