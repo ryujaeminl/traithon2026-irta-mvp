@@ -294,11 +294,49 @@ def evidence_block(row: dict) -> None:
                     unsafe_allow_html=True)
 
 
+def explain(row: dict) -> list[str]:
+    """이 기사가 왜 이 등급인지, 판정 내용으로 풀어 쓴 문장들(숫자·전문 용어 없음, BK03)."""
+    j, a, reason = row["judgment"], row["article"], row["reason"]
+    theta, low = cfg["rule"]["theta"], cfg["rule"]["certainty_low"]
+
+    def quote(nums: list[int]) -> str:
+        qs = [f"{n}번째 문장 「{a['sentences'][n - 1][:80]}」" for n in nums if 0 < n <= len(a["sentences"])
+              and a["sentences"][n - 1]]
+        return ", ".join(qs)
+
+    out: list[str] = []
+    if reason == "안전 모드":
+        out.append(T("WHY-안전 모드", why=state.get("why", "-")))
+    elif reason == "처리 오류":
+        err = j.get("error") or ""
+        out.append(T("WHY-처리 오류-무관" if "무관" in err else "WHY-처리 오류-판정" if "형식" in err
+                     else "WHY-처리 오류-모델"))
+    elif reason == "확신 부족":
+        out.append(T("WHY-확신 부족-갈피") if (row["c"] or 0) < low else T("WHY-확신 부족-약함", label=j["label"]))
+        out.append(T("WHY-확신 부족-확인"))
+    elif reason == "판단 엇갈림":
+        where = quote(j["irrelevant"][:2])
+        out.append(T("WHY-판단 엇갈림", where=f"({where})" if where else ""))
+    elif reason == "본문 절단":
+        out.append(T("WHY-본문 절단"))
+    elif reason == "낚시 확신":
+        out.append(T("WHY-낚시 확신"))
+    else:
+        out.append(T("WHY-높음"))
+    if j.get("evidence") and reason not in ("처리 오류",):
+        ev = quote(j["evidence"])
+        if ev:
+            out.append(T("WHY-근거", ev=ev))
+    return out
+
+
 def ai_panel(row: dict) -> None:
     word = certainty_word(row["c"], cfg["rule"]["theta"], cfg["rule"]["certainty_low"])
     extra = T("TLD-01-c-엇갈림") if row["reason"] == "판단 엇갈림" else ""
-    st.markdown(f"**AI 판단** · {T('TLD-01-a-' + row['grade'])}  \n"
-                f"사유: {REASON_TEXT.get(row['reason'], '제목과 본문이 맞음')}  \n{T('TLD-01-c', word=word)}{extra}")
+    why = "".join(f"<li>{esc(t)}</li>" for t in explain(row))
+    st.markdown(f'{badge(row["grade"], T("TLD-01-a-" + row["grade"]))} <span class="small">AI 판단 · '
+                f'{esc(T("TLD-01-c", word=word) + extra)}</span><ul class="small" style="margin-top:6px">{why}</ul>',
+                unsafe_allow_html=True)
 
 
 # ---------- 리서치 결과 (HO-01·02, TLD-01·03) ----------
@@ -372,7 +410,8 @@ def page_results() -> None:
         a, aid = r["article"], r["article"]["id"]
         with st.container(border=True):
             card_title(a, LOW, "✕ 낮음 · 요약에서 제외")
-            st.markdown(f'<div class="small">제외 사유: {esc(REASON_TEXT[r["reason"]])}</div>', unsafe_allow_html=True)
+            why = " ".join(explain(r))
+            st.markdown(f'<div class="small">제외 사유: {esc(why)}</div>', unsafe_allow_html=True)
             evidence_block(r)
             if aid in dec:
                 st.success("낮음에서 복원됨")
