@@ -20,12 +20,18 @@ from .data import Article, norm_title
 
 # 2026-10-28 점검: 매일경제·한겨레는 robots.txt 금지, 조선일보는 본문이 스크립트로 그려져 추출 불가,
 # SBS는 피드 이용 조건이 '개인 리더 이용'이라 뺐다.
+# 언론사 → 전체·분야별 피드. 이슈 검색은 이 피드들의 최근 기사(약 1,600건)에서 검색어로 고른다.
+_YNA = ["news", "entertainment", "politics", "economy", "society", "international", "industry", "culture",
+        "northkorea", "local", "health", "sports", "market"]
 FEEDS = {
-    "연합뉴스": "https://www.yna.co.kr/rss/news.xml",
-    "연합뉴스 연예": "https://www.yna.co.kr/rss/entertainment.xml",
-    "경향신문": "https://www.khan.co.kr/rss/rssdata/total_news.xml",
-    "동아일보": "https://rss.donga.com/total.xml",
+    "연합뉴스": [f"https://www.yna.co.kr/rss/{k}.xml" for k in _YNA],
+    "경향신문": ["https://www.khan.co.kr/rss/rssdata/total_news.xml"]
+                + [f"https://www.khan.co.kr/rss/rssdata/{k}_news.xml" for k in ("politic", "economy", "society", "culture")],
+    "동아일보": ["https://rss.donga.com/total.xml"]
+                + [f"https://rss.donga.com/{k}.xml" for k in ("politics", "economy", "national", "international", "culture")],
 }
+FEED_TTL_SEC = 300
+_feed_cache: dict[str, tuple[float, list[dict]]] = {}
 UA = "Mozilla/5.0 (TRAITHON2026 research prototype; mixnuts)"
 MIN_SENT = 3
 REQUEST_GAP_SEC = 1.0
@@ -106,18 +112,28 @@ def extract_sentences(html: str) -> list[str]:
     return sents
 
 
-def fetch_feed(name: str, limit: int = 20) -> list[dict]:
+def fetch_feed(name: str, limit: int | None = None) -> list[dict]:
+    """언론사의 전체·분야별 피드를 합친 최근 기사(링크 중복 제거, 5분 캐시)."""
     import feedparser
 
-    d = feedparser.parse(FEEDS[name], agent=UA)
-    out = []
-    for e in d.entries[:limit]:
-        content = (e.get("content") or [{}])[0].get("value", "")
-        t = e.get("published_parsed") or e.get("updated_parsed")
-        out.append({"source": name, "title": e.get("title", ""), "link": e.get("link", ""),
-                    "published": e.get("published", ""), "ts": calendar.timegm(t) if t else 0,
-                    "summary": e.get("summary", ""), "content": content})
-    return out
+    hit = _feed_cache.get(name)
+    if hit and time.time() - hit[0] < FEED_TTL_SEC:
+        return hit[1][:limit]
+    out, seen = [], set()
+    for url in FEEDS[name]:
+        for e in feedparser.parse(url, agent=UA).entries:
+            link = e.get("link", "")
+            if not link or link in seen:
+                continue
+            seen.add(link)
+            content = (e.get("content") or [{}])[0].get("value", "")
+            t = e.get("published_parsed") or e.get("updated_parsed")
+            out.append({"source": name, "title": e.get("title", ""), "link": link,
+                        "published": e.get("published", ""), "ts": calendar.timegm(t) if t else 0,
+                        "summary": re.sub(r"<[^>]+>", " ", e.get("summary", "")), "content": content})
+    out.sort(key=lambda e: e["ts"], reverse=True)
+    _feed_cache[name] = (time.time(), out)
+    return out[:limit]
 
 
 def fetch_article(entry: dict) -> Article | None:

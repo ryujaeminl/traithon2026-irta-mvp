@@ -142,31 +142,60 @@ def remote_api() -> tuple[str, str] | None:
     return (url.rstrip("/"), tok) if url and tok else None
 
 
-def search_news(feeds: list[str], top_n: int) -> None:
-    """WF1·WF2 '새 기사 찾기'. GPU가 있으면 여기서 판정, 없으면 판정 서버 호출, 둘 다 없으면 목록만."""
+def _api(url: str, tok: str, path: str, body: dict | None = None) -> dict:
     import urllib.request
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = urllib.request.Request(f"{url}{path}", data=data, method="POST" if body is not None else "GET",
+                                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {tok}"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read())
+
+
+def search_news(query: str, feeds: list[str], top_n: int) -> None:
+    """WF1·WF2 이슈 리서치 요청. GPU가 있으면 여기서 판정, 없으면 판정 서버(접수→조회), 둘 다 없으면 목록만."""
+    import urllib.error
 
     from irta.pipeline import collect, judge_and_save, new_request_id
 
     ss["unjudged"] = None          # 이전 '판정 대기' 목록이 새 결과를 가리지 않게 지운다
     if gpu_ready():
-        with st.spinner(f"최신 기사 {top_n}건을 찾아 A.X로 판정하는 중… (기사당 약 3초)"):
-            rid = new_request_id()
-            judge_and_save(get_model(), cfg, [(a, "rss", None) for a in collect(feeds, top_n)], rid)
+        with st.spinner("이슈 기사를 찾는 중…"):
+            arts = collect(feeds, top_n, query)
+        if not arts:
+            st.sidebar.warning("최근 기사 중 이 이슈와 맞는 기사를 찾지 못했습니다. 검색어를 바꿔 보세요.")
+            return
+        bar = st.progress(0.0, text=f"A.X 판정 0/{len(arts)}")
+        rid = new_request_id()
+        judge_and_save(get_model(), cfg, [(a, "rss", None) for a in arts], rid, query=query,
+                       progress=lambda i, n: bar.progress(i / n, text=f"A.X 판정 {i}/{n}"))
         ss["pick"] = rid
         return
     api = remote_api()
     if api:
         url, tok = api
-        req = urllib.request.Request(f"{url}/judge", method="POST",
-                                     data=json.dumps({"feeds": feeds, "top_n": top_n}).encode("utf-8"),
-                                     headers={"Content-Type": "application/json", "Authorization": f"Bearer {tok}"})
         try:
-            with st.spinner(f"판정 서버에서 최신 기사 {top_n}건을 판정하는 중… (1~2분)"):
-                with urllib.request.urlopen(req, timeout=900) as resp:
-                    res = json.loads(resp.read())
+            jid = _api(url, tok, "/judge", {"feeds": feeds, "top_n": top_n, "query": query})["job_id"]
+            bar = st.progress(0.0, text="판정 서버에 요청했습니다…")
+            for _ in range(600):                     # 최대 약 20분
+                time.sleep(2)
+                job = _api(url, tok, f"/jobs/{jid}")
+                if job["status"] != "running":
+                    break
+                n = max(job.get("total") or 1, 1)
+                bar.progress(min(job.get("done", 0) / n, 1.0), text=f"{job['stage']} {job.get('done', 0)}/{n}")
+        except urllib.error.HTTPError as exc:
+            st.sidebar.error(f"판정 서버 오류 {exc.code}" + (" — 다른 판정이 진행 중입니다." if exc.code == 429 else
+                             " — 토큰이 맞지 않습니다." if exc.code == 401 else ""))
+            return
         except Exception as exc:
-            st.sidebar.error(f"판정 서버에 연결하지 못했습니다({type(exc).__name__}). 서버가 켜져 있는지 확인하세요.")
+            st.sidebar.error(f"판정 서버에 연결하지 못했습니다({type(exc).__name__}). 노트북 서버·터널이 켜져 있는지 확인하세요.")
+            return
+        if job["status"] != "done":
+            st.sidebar.error(job.get("stage", "판정 실패"))
+            return
+        res = job["result"]
+        if not res["rows"]:
+            st.sidebar.warning("최근 기사 중 이 이슈와 맞는 기사를 찾지 못했습니다. 검색어를 바꿔 보세요.")
             return
         out = RUNS / "bundles" / f"{res['request_id']}.jsonl"
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -174,7 +203,7 @@ def search_news(feeds: list[str], top_n: int) -> None:
         ss["pick"] = res["request_id"]
         return
     with st.spinner("기사 목록을 가져오는 중…"):
-        ss["unjudged"] = collect(feeds, top_n)
+        ss["unjudged"] = collect(feeds, top_n, query)
 
 
 # ---------- 사이드바 ----------
@@ -185,16 +214,18 @@ user = st.sidebar.text_input("크리에이터 가명 ID", value="creator-01")
 # 노트북·GPU에서 판정한 묶음(runs/bundles) + 저장소에 올린 시연 묶음(demo/bundles, Streamlit Cloud용)
 DEMO = Path(__file__).resolve().parent / "demo" / "bundles"
 with st.sidebar.container(border=True):
-    st.markdown("**새 기사 찾기**")
+    st.markdown("**이슈 리서치 요청**")
+    query = st.text_input("어떤 이슈를 정리할까요?", placeholder="예: 구글 과징금, 전기차 배터리 화재",
+                          help="비워 두면 최신 기사 Top N을 가져옵니다.")
     feeds_sel = st.multiselect("언론사", list(FEEDS), default=list(FEEDS))
-    top_n = st.select_slider("가져올 기사 수 (최신순 Top N)", [5, 10, 20, 30], value=10)
+    top_n = st.select_slider("가져올 기사 수 (Top N)", [5, 10, 20, 30], value=10)
     mode = "이 컴퓨터 GPU로 판정" if gpu_ready() else ("판정 서버로 판정" if remote_api() else "판정 서버 미연결 — 목록만")
     st.caption(f"판정 방식: {mode}")
     if mode.startswith("판정 서버 미연결"):
         why = ss.get("secret_err") or ", ".join(ss.get("api_missing") or [])
         st.caption(f"Secrets에서 찾지 못한 값: {why} — 앱 Settings → Secrets에 최상위로 넣고 저장한 뒤 'Reboot app'을 누르세요.")
-    if st.button("기사 찾기", type="primary", use_container_width=True, disabled=not feeds_sel):
-        search_news(feeds_sel, top_n)
+    if st.button("이슈 기사 찾기", type="primary", use_container_width=True, disabled=not feeds_sel):
+        search_news(query.strip(), feeds_sel, top_n)
 bundles = sorted([*(RUNS / "bundles").glob("*.jsonl"), *DEMO.glob("*.jsonl")], key=lambda p: p.stem, reverse=True)
 if ss.get("unjudged") is not None:
     st.title("가져온 기사 (판정 대기)")
@@ -256,6 +287,11 @@ def evidence_block(row: dict) -> None:
     st.markdown("".join(parts), unsafe_allow_html=True)
     if a.get("url"):
         st.markdown(f"[원문 보기 ↗]({a['url']})")
+    if row.get("related"):
+        items = "".join(f'<div class="small">· {esc(o["source"])} — <a href="{esc(o["url"])}" target="_blank">'
+                        f'{esc(o["title"])}</a><br>&nbsp;&nbsp;「{esc(o["lead"][:120])}」</div>' for o in row["related"])
+        st.markdown(f'<div class="banner"><b>같은 이슈의 다른 기사</b> (참고용 · 등급에는 쓰지 않음){items}</div>',
+                    unsafe_allow_html=True)
 
 
 def ai_panel(row: dict) -> None:
@@ -269,7 +305,9 @@ def ai_panel(row: dict) -> None:
 
 def page_results() -> None:
     st.title("리서치 결과")
-    st.markdown(f'<span class="small">{esc(req)} · 기사 {len(rows)}건</span>', unsafe_allow_html=True)
+    q = next((r.get("query") for r in rows if r.get("query")), "")
+    st.markdown(f'<span class="small">{"이슈: " + esc(q) + " · " if q else ""}{esc(req)} · 기사 {len(rows)}건</span>',
+                unsafe_allow_html=True)
     # 점검용 기사는 등급과 무관하게 확인 목록에 섞고(구별되지 않게 순서를 섞음), 요약에는 넣지 않는다(BK06 HO-01)
     mids = sorted([r for r in rows if r["grade"] == MID or r.get("kind") == "check"],
                   key=lambda r: hashlib.sha1((req + r["article"]["id"]).encode()).hexdigest())

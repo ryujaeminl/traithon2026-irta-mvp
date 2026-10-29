@@ -23,7 +23,8 @@ from irta.pipeline import collect, judge_and_save, new_request_id  # noqa: E402
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--top-n", type=int, default=10, help="고른 언론사를 합친 최신순 상위 N건")
+    ap.add_argument("--top-n", type=int, default=10, help="가져올 기사 수")
+    ap.add_argument("--query", default="", help="이슈 검색어(예: 구글 과징금). 비우면 최신순")
     ap.add_argument("--feeds", nargs="*", default=list(FEEDS))
     ap.add_argument("--aihub-demo", type=int, default=0)
     ap.add_argument("--check-ratio", type=float, default=0.10)
@@ -32,7 +33,7 @@ def main() -> None:
     cfg = load_cfg()
     theta, low = cfg["rule"]["theta"], cfg["rule"]["certainty_low"]
     request_id = new_request_id()
-    arts = collect(args.feeds, args.top_n)
+    arts = collect(args.feeds, args.top_n, args.query)
     items = [(a, "rss", None) for a in arts]
     seed = int(request_id[-6:])
     if args.aihub_demo:
@@ -49,7 +50,7 @@ def main() -> None:
           f"+ 점검용 {len(checks)}건, 모델 로드 중…")
 
     model = AXModel(cfg)
-    rows = judge_and_save(model, cfg, items, request_id)
+    rows = judge_and_save(model, cfg, items, request_id, query=args.query)
     for r in rows:
         a, j = r["article"], r["judgment"]
         print(f"[{r['grade']}/{r['reason'] or '-'} · {certainty_word(j['c'], theta, low)}] {r['kind']} {a['category']} "
