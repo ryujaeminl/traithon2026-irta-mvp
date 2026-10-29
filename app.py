@@ -15,6 +15,15 @@ from pathlib import Path
 
 import streamlit as st
 
+import importlib
+
+import irta.grade
+import irta.texts
+
+# Streamlit(Cloud 포함)은 코드가 바뀌어도 app.py만 다시 실행하고 이미 불러온 모듈은 그대로 쓴다.
+# 문안·등급 규칙이 바뀐 뒤 KeyError가 나지 않도록 매 실행마다 새로 불러온다.
+importlib.reload(irta.texts)
+importlib.reload(irta.grade)
 from irta.data import load_cfg
 from irta.grade import HIGH, LOW, MID, REASON_TEXT, certainty_word, grade
 from irta.logs import mask, now, read_log, write_log
